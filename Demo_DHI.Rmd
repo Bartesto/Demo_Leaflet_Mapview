@@ -1,0 +1,269 @@
+---
+title: "Leaflet mapping - Dirk Hartog"
+author: "Bart Huntley"
+date: "26 May 2017"
+output: html_document
+---
+
+#Introduction
+Leaflet is an incredibly powerful JavaScript library for interactive mapping leveraging open source base maps. Output from this process is a html map that can be used in documents like this and can also be distributed as a stand-alone products.
+
+What I see as a really exciting prospect is that in delivering data to our stakeholders we can add a spatial dimension that gives the user a "virtual" GIS to explore their own data.
+
+What follows is a couple of examples showing some of the possibilities, using real data from our fieldwork on Dirk Hartog Island.
+
+##Data Preparation
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+# Required libraries
+library(leaflet)
+library(mapview)
+library(sf) # simple features pkg for vector management
+library(raster) # raster pkg for raster management
+library(RColorBrewer) # leverage ColorBrewer palletes
+
+# Working directory
+dir <- "Z:/DOCUMENTATION/BART/R/R_DEV/maps2"
+
+```
+
+###Vectors
+For these maps I will use both the leaflet and mapview libraries to create the functionality that I want. As the Leaflet library is designed around "world" maps and uses WGS84 for its CRS, much of the initial data prep involves getting coordinate systems to play with each other. 
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+# Input shapes, transform and rename attributes and convert factors
+setwd(dir)
+tracks <- st_read("./data/tracks_reintroduction_gda.shp", quiet = TRUE)
+tracks <- st_transform(tracks, '+proj=longlat +datum=WGS84')
+sites <- st_read("./data/dhi_fieldwork_records_reintroductions_mga49.shp", quiet = TRUE)
+sites <- st_transform(sites[1], '+proj=longlat +datum=WGS84')
+names(sites) <- c("site", "geometry") # "geometry" is a common field in a sf object
+sites$site <- as.character(sites$site)
+```
+
+In the map I'm going to display site locations and tracks (roads) and these are managed above. I'd also like to show some other locations to help orientate the user and am going to use the locations of the homestead and airstrip. For these I will leverage an external library of icons called [Font Awesome](http://fontawesome.io/icons/) for some symbology. I'll add these locations initially with a shape file but I found it easiest to then convert it to a data frame to get the icons that I was after.
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+# Different handling due to requirements for awesomeicons below
+# Make into SP to aid DF creation
+setwd(dir)
+interest <- st_read("./data/dhi_homestead_airstrip_gda.shp", quiet = TRUE)
+interest <- st_transform(interest, '+proj=longlat +datum=WGS84')
+names(interest) <- c("Id", "label", "geometry")# "geometry" is a common field in a sf object
+interestsp <- as(interest, "Spatial")
+interestdf <- cbind(interestsp@coords, interestsp@data)
+names(interestdf) <- c("long", "lat", "Id", "label")
+
+# This is a function to adjust the data frame
+getIcon <- function(other_df){
+  sapply(other_df$label, function(label) {
+    if(label == "Airstrip") {
+      "plane"
+    } else {
+      "home"
+    } 
+  })
+}
+
+# This call creates the icons
+iconsOther <- awesomeIcons(
+  icon = getIcon(interestdf), 
+  markerColor =  "green",
+  squareMarker = TRUE,
+  iconColor = "black"
+)
+
+```
+
+### Raster
+I'd like to display a raster layer of veg cover on the map. When created the raster had gridcode values (0-5) relating to certain veg cover classes. As I'd like to make a legend and make it informative, the values need to be remapped to the values we'd like to display. 
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+# Read in raster and get rid of zeros so they don't plot also map vals for legend
+setwd(dir)
+cover <- raster("./data/Veg_cover_240217_south_mga49.tif")
+cover[cover == 0] <- NA
+cover[cover == 1] <- 50
+cover[cover == 2] <- 40
+cover[cover == 3] <- 30
+cover[cover == 4] <- 20
+cover[cover == 5] <- 10
+
+# Colour pallette for raster - beware the rev for legend
+colR1 <- brewer.pal(5,"RdYlGn")
+colR2 <- colorNumeric(rev(brewer.pal(5,"RdYlGn")), values(cover), na.color = "transparent")
+
+# Function to handle reversing the legend (defaults to increasing rather than decreasing)
+myLabelFormat = function(..., reverse_order = FALSE){ 
+  if(reverse_order){ 
+    function(type = "numeric", cuts){ 
+      cuts <- sort(cuts, decreasing = T)
+    } 
+  }else{
+    labelFormat(...)
+  }
+}
+```
+
+### Data Augmentation
+With the data processed above a pretty reasonable map can be produced. To leverage some of the extra capabilities and really value add to the map some other steps need to be taken.
+
+For this demo I'd like to link the sites with extra info such as photos or graphs. Unfortunately I can't through this particular demo as I would need to ship it within its own folder structure. That way when you open the html from within the delivery it knows the location of the graphs/photos. I will provide the code that could produce this below.
+
+Okay, so the way this works is that the html code will live in a folder called "html" (can name this one whatever you like) but all of the supporting data (such as graphs, photos, logos etc) **_MUST_** reside in a folder called "graphs" and this folder must be one level "up" from the html. What has worked for me is one folder for the delivery that contains a folder called "graphs" and another called "html".
+
+To get around this you can go two ways. You can refer to URLs for the images and/or you could generate graphs within the code block rather than refer to static files.
+
+So within the "graphs" folder the photos and graphs and are named for the sites they belong to. Due to alpha numeric sorting, they are not in the same sequence as the plotting order of the shape file for the sites. With this in mind, use the popupImage function from maview to create the necessary html code.
+
+```{r, eval=FALSE, message=FALSE, warning=FALSE}
+# Read in raster and get rid of zeros so they don't plot also map vals for legend
+setwd(dir)
+
+# Make photo html code
+# get list of photos
+photos <- list.files(path = "./graphs", full.names = TRUE, pattern = "c.JPG")
+PIs <- vector("character", length(photos)) # create empty vector for storing html
+
+photosord <- photos[c(4, 3, 2, 1, 5, 6, 7, 8, 9, 10)]# re-order to match plotting order of sites
+for(i in seq_along(photosord)){
+  PI <- popupImage(photosord[i], src = "local")
+  PIs[i] <- PI
+}
+
+# Make graph html code
+# get list of graphs
+graphs <- list.files(path = "./graphs", full.names = TRUE, pattern = ".png")[-1] #remove logo png
+CIs <- vector("character", length(graphs)) # create empty vector for storing html
+
+graphsord <- graphs[c(4, 3, 2, 1, 5, 6, 7, 8, 9, 10)]# re-order to match plotting order of sites
+for(i in seq_along(graphsord)){
+  CI <- popupImage(graphsord[i], src = "local")
+  CIs[i] <- CI
+}
+```
+
+##Map Making
+So time to put it together. The code below will create a map showing lots of the interactivity possible. I have commented out the elements that won't work with our current format as described above. Essentially we are missing out on pop up photos/graphs at the sites and a DPaW logo. If we wanted to be really clever we could generate the graphs **_within_** the code block and then we could link them to get around the format issue.
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+m <- leaflet(width = "100%") %>%
+  addProviderTiles(providers$Esri.WorldImagery) %>%
+  addMiniMap(tiles = providers$Esri.WorldImagery,
+             toggleDisplay = TRUE) %>%
+  # addCircleMarkers(data = sites, label = paste0("Site: ", sites$site), 
+  #                  popup = PIs, radius = 3, color = "red", group = "Site Photos") %>%
+  addCircleMarkers(data = sites, label = paste0("Site: ", sites$site), 
+                   radius = 3, color = "red", group = "Sites") %>%
+  addAwesomeMarkers(data = interestdf, icon = iconsOther,
+                    label =  ~as.character(label)) %>%
+  addPolylines(data = tracks, color = "black", weight = 2) %>%
+  addRasterImage(cover, project = TRUE, colors = colR1, 
+                 opacity = 0.5, group = "Cover") %>%
+  addLegend("topright",
+            pal = colR2,
+            values = values(cover),
+            labFormat = myLabelFormat(reverse_order = T)) %>%
+  addLayersControl(overlayGroups = c("Cover", "Site"),
+                   options = layersControlOptions(collapsed = FALSE)) %>%
+  addMeasure(position = "topleft",
+             primaryLengthUnit = "meters",
+             primaryAreaUnit = "hectares",
+             activeColor = "#3D535D",
+             completedColor = "#7D4479") %>%
+  # addLogo(img = "./data/DPaW_logo.png", alpha = 1, position = "bottomleft",
+  #         src = "local", height = 100, width = 200, offset.x = 10, offset.y = 40) %>%
+  addMouseCoordinates()
+
+m 
+```
+
+**Cool Things To Note:**
+
+1. Layers can be turned on and off
+2. Got a legend
+3. Location map is dynamic
+4. Measurement tool (upper left corner) does both linear and areal measurements
+5. Cursor position and zoom level is displayed along the top.
+
+Lets make another one but this time sync it with another!
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+m1 <- leaflet(width = "100%") %>%
+  addMiniMap(tiles = providers$Esri.WorldImagery,
+             toggleDisplay = TRUE, position = "bottomleft") %>%
+  addProviderTiles(providers$Esri.WorldImagery) %>%
+  addCircleMarkers(data = sites, label = paste0("Site: ", sites$site), 
+                   radius = 3, color = "red", group = "Sites") %>%
+  addAwesomeMarkers(data = interestdf, icon = iconsOther,
+                    label =  ~as.character(label)) %>%
+  addPolylines(data = tracks, color = "black", weight = 2) %>%
+  addLayersControl(overlayGroups = "Sites",
+                   options = layersControlOptions(collapsed = FALSE)) %>%
+  addMeasure(position = "topleft",
+             primaryLengthUnit = "meters",
+             primaryAreaUnit = "hectares",
+             activeColor = "#3D535D",
+             completedColor = "#7D4479") %>%
+  addMouseCoordinates()
+
+m2 <- leaflet(width = "100%") %>%
+  addProviderTiles(providers$Esri.WorldImagery) %>%
+  addCircleMarkers(data = sites, label = paste0("Site: ", sites$site), 
+                   radius = 3, color = "red", group = "Sites") %>%
+  addAwesomeMarkers(data = interestdf, icon = iconsOther,
+                    label =  ~as.character(label)) %>%
+  addPolylines(data = tracks, color = "black", weight = 2) %>%
+  addRasterImage(cover, project = TRUE, colors = colR1, 
+                 opacity = 0.5, group = "Cover") %>%
+  addLegend("topright",
+            pal = colR2,
+            values = values(cover),
+            labFormat = myLabelFormat(reverse_order = T)) %>%
+  addLayersControl(overlayGroups = c("Cover", "Sites"),
+                   options = layersControlOptions(collapsed = FALSE)) %>%
+  addMouseCoordinates()
+
+mapSync <- mapview::sync(m1, m2, ncol = 1)
+mapSync
+```
+
+##More
+This is all good but to share with others with linked photos you need to do the following.
+```{r, eval=FALSE, message=FALSE, warning=FALSE}
+# Save out as html to share - note must go in folder so folder graphs is one 
+# level up
+mapshot(m, url = paste0(getwd(), "/html/map.html"))
+```
+
+This works for one map (i.e. widget) but not when we have two or more maps linked. To do that we need to run a neat little function first.
+```{r, eval=FALSE, message=FALSE, warning=FALSE}
+# Special function needed to save more than one widget
+save_tags <- function (tags, file, selfcontained = F, libdir = "./lib") 
+{
+  if (is.null(libdir)) {
+    libdir <- paste(tools::file_path_sans_ext(basename(file)), 
+                    "_files", sep = "")
+  }
+  htmltools::save_html(tags, file = file, libdir = libdir)
+  if (selfcontained) {
+    if (!htmlwidgets:::pandoc_available()) {
+      stop("Saving a widget with selfcontained = TRUE requires pandoc. For details see:\n", 
+           "https://github.com/rstudio/rmarkdown/blob/master/PANDOC.md")
+    }
+    htmlwidgets:::pandoc_self_contained_html(file, file)
+    unlink(libdir, recursive = TRUE)
+  }
+  return(file)
+}
+
+# Save the beast!
+save_tags(mapSync, paste0(getwd(), "/html/mapSync.html"), selfcontained=TRUE)
+```
+
+##Last Thoughts
+I really thinks this adds a lot of value to an analysis. To be able to pan/zoom around their own sites and see products that we have made is a game changer. Dynamically linking maps allows for a lot of data to be displayed without overloading and unnecessarily complicating a single map whilst linking to supporting info further supports this. 
+
+**Additional Benefits**:
+
+1. If this were bundled to be sent to a user (including site photos and graphs) it only comes to 20MB. That's pretty small considering its a cut-down user-specific GIS.
+
+2. It is a very intuitive and user friendly map. Anyone who has interacted with Google Maps can drive it.
+
+3. Although the code above may look complicated, it uses well supported packages and libraries. Also some of the work can be cut down (e.g. making sure all the data is in the right CRS before import)

@@ -1,0 +1,192 @@
+---
+title: "Leaflet mapping - Dirk Hartog - No code"
+author: "Bart Huntley"
+date: "26 May 2017"
+output: html_document
+---
+
+#Introduction
+Leaflet is an incredibly powerful JavaScript library for interactive mapping leveraging open source base maps. Output from this process is a html map that can be used in documents like this and can also be distributed as a stand-alone products.
+
+What I see as a really exciting prospect is that in delivering data to our stakeholders we can add a spatial dimension that gives the user a "virtual" GIS with which to explore their own data as well as ours.
+
+What follows is a couple of examples showing some of the possibilities, using real data from our fieldwork on Dirk Hartog Island.
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE}
+# Required libraries
+library(leaflet)
+library(mapview)
+library(sf) # simple features pkg for vector management
+library(raster) # raster pkg for raster management
+library(RColorBrewer) # leverage ColorBrewer palletes
+
+# Working directory
+dir <- "Z:/DOCUMENTATION/BART/R/R_DEV/maps2"
+# Input shapes, transform and rename attributes and convert factors
+setwd(dir)
+tracks <- st_read("./data/tracks_reintroduction_gda.shp", quiet = TRUE)
+tracks <- st_transform(tracks, '+proj=longlat +datum=WGS84')
+sites <- st_read("./data/dhi_fieldwork_records_reintroductions_mga49.shp", quiet = TRUE)
+sites <- st_transform(sites[1], '+proj=longlat +datum=WGS84')
+names(sites) <- c("site", "geometry") # "geometry" is a common field in a sf object
+sites$site <- as.character(sites$site)
+
+# Different handling due to requirements for awesomeicons below
+# Make into SP to aid DF creation
+interest <- st_read("./data/dhi_homestead_airstrip_gda.shp", quiet = TRUE)
+interest <- st_transform(interest, '+proj=longlat +datum=WGS84')
+names(interest) <- c("Id", "label", "geometry")# "geometry" is a common field in a sf object
+interestsp <- as(interest, "Spatial")
+interestdf <- cbind(interestsp@coords, interestsp@data)
+names(interestdf) <- c("long", "lat", "Id", "label")
+
+# This is a function to adjust the data frame
+getIcon <- function(other_df){
+  sapply(other_df$label, function(label) {
+    if(label == "Airstrip") {
+      "plane"
+    } else {
+      "home"
+    } 
+  })
+}
+
+# This call creates the icons
+iconsOther <- awesomeIcons(
+  icon = getIcon(interestdf), 
+  markerColor =  "green",
+  squareMarker = TRUE,
+  iconColor = "black"
+)
+
+# Read in raster and get rid of zeros so they don't plot also map vals for legend
+setwd(dir)
+cover <- raster("./data/Veg_cover_240217_south_mga49.tif")
+cover[cover == 0] <- NA
+cover[cover == 1] <- 50
+cover[cover == 2] <- 40
+cover[cover == 3] <- 30
+cover[cover == 4] <- 20
+cover[cover == 5] <- 10
+
+# Colour pallette for raster - beware the rev for legend
+colR1 <- brewer.pal(5,"RdYlGn")
+colR2 <- colorNumeric(rev(brewer.pal(5,"RdYlGn")), values(cover), na.color = "transparent")
+
+# Function to handle reversing the legend (defaults to increasing rather than decreasing)
+myLabelFormat = function(..., reverse_order = FALSE){ 
+  if(reverse_order){ 
+    function(type = "numeric", cuts){ 
+      cuts <- sort(cuts, decreasing = T)
+    } 
+  }else{
+    labelFormat(...)
+  }
+}
+
+```
+##Data Used
+
+1. Vector layers
+    + A shape file of site locations
+    + A shape file of tracks/roads
+    + A shape file of extra locations (airstrip and homestead)
+
+2. Raster layers
+    + Base layers are from Esri World Imagery (open source)
+    + A classification raster of vegetation cover 
+
+
+## Maps
+###Single Map
+First up is a single map of the southern part of Dirk Hartog Island. Things to note:
+
+1. Layers can be turned on and off
+2. Got a legend
+3. Location map is dynamic
+4. Measurement tool (upper left corner) does both linear and areal measurements
+5. Cursor position and zoom level is displayed along the top.
+
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE}
+m <- leaflet(width = "100%") %>%
+  addProviderTiles(providers$Esri.WorldImagery) %>%
+  addMiniMap(tiles = providers$Esri.WorldImagery,
+             toggleDisplay = TRUE) %>%
+  addCircleMarkers(data = sites, label = paste0("Site: ", sites$site), 
+                   radius = 3, color = "red", group = "Sites") %>%
+  addAwesomeMarkers(data = interestdf, icon = iconsOther,
+                    label =  ~as.character(label)) %>%
+  addPolylines(data = tracks, color = "black", weight = 2) %>%
+  addRasterImage(cover, project = TRUE, colors = colR1, 
+                 opacity = 0.5, group = "Cover") %>%
+  addLegend("topright",
+            pal = colR2,
+            values = values(cover),
+            labFormat = myLabelFormat(reverse_order = T)) %>%
+  addLayersControl(overlayGroups = c("Cover", "Site"),
+                   options = layersControlOptions(collapsed = FALSE)) %>%
+  addMeasure(position = "topleft",
+             primaryLengthUnit = "meters",
+             primaryAreaUnit = "hectares",
+             activeColor = "#3D535D",
+             completedColor = "#7D4479") %>%
+  addMouseCoordinates()
+
+m 
+```
+
+###Synced Maps
+Second map/s to show you is a synced version. This allows a lot more information to be displayed without over-complicating a single map. Check out the "ghost" cursor in the map you are not interacting with. I have synced 2 here but have also had a panel of 4! You can easily configure which maps to sync and layout etc.
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE}
+m1 <- leaflet(width = "100%") %>%
+  addMiniMap(tiles = providers$Esri.WorldImagery,
+             toggleDisplay = TRUE, position = "bottomleft") %>%
+  addProviderTiles(providers$Esri.WorldImagery) %>%
+  addCircleMarkers(data = sites, label = paste0("Site: ", sites$site), 
+                   radius = 3, color = "red", group = "Sites") %>%
+  addAwesomeMarkers(data = interestdf, icon = iconsOther,
+                    label =  ~as.character(label)) %>%
+  addPolylines(data = tracks, color = "black", weight = 2) %>%
+  addLayersControl(overlayGroups = "Sites",
+                   options = layersControlOptions(collapsed = FALSE)) %>%
+  addMeasure(position = "topleft",
+             primaryLengthUnit = "meters",
+             primaryAreaUnit = "hectares",
+             activeColor = "#3D535D",
+             completedColor = "#7D4479") %>%
+  addMouseCoordinates()
+
+m2 <- leaflet(width = "100%") %>%
+  addProviderTiles(providers$Esri.WorldImagery) %>%
+  addCircleMarkers(data = sites, label = paste0("Site: ", sites$site), 
+                   radius = 3, color = "red", group = "Sites") %>%
+  addAwesomeMarkers(data = interestdf, icon = iconsOther,
+                    label =  ~as.character(label)) %>%
+  addPolylines(data = tracks, color = "black", weight = 2) %>%
+  addRasterImage(cover, project = TRUE, colors = colR1, 
+                 opacity = 0.5, group = "Cover") %>%
+  addLegend("topright",
+            pal = colR2,
+            values = values(cover),
+            labFormat = myLabelFormat(reverse_order = T)) %>%
+  addLayersControl(overlayGroups = c("Cover", "Sites"),
+                   options = layersControlOptions(collapsed = FALSE)) %>%
+  addMouseCoordinates()
+
+mapSync <- mapview::sync(m1, m2, ncol = 1)
+mapSync
+```
+
+
+##Thoughts
+I really think this adds a lot of value to an analysis. For a user to be able to pan/zoom around their own sites and see products that we have made is a game changer. Dynamically linking maps allows for a lot of data to be displayed without overloading and unnecessarily complicating a single map whilst linking to supporting info further supports this. The end user doesn't need an expensive (or free GIS) and if they can use Google Maps to find the coffee shop they can use this.
+
+##Further Linking?
+You can link extra data to site/locations through popups. Things like tables, graphs, photos...hell even gifs and movies are possible. The first two are easily accomplished. Tables are directly accessed from the shape file attributes and graphs, if generated within the rmarkdown document (I have generated this html by using one), can be embedded in the html.
+
+Anything else becomes tricky if the picture, movie, gif etc is stored locally. If the data can be refered to by URL then no probs but a local directory poses difficulties. I have found a way though in which to bundle up the necessary libraries and folders which makes it more transportable. I envision giving the client their analysis and with it a folder with the map. As long as the html is opened where the user finds it, the html knows where to find linking photos etc.
+
+Following this method I have been able to link site photos and saved graphs to site locations and even embed the maps with a DPaW logo. The whole shebang, as described, comes to a measley 20MB...pretty cool for a stripped down GIS.
+
